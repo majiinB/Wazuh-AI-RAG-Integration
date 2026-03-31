@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+from decouple import config, Csv
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -25,7 +26,28 @@ SECRET_KEY = 'django-insecure-i3$b-7tt9j(wo8hj081@_j-^uo3#bqt5=h9j()s$4)jy2b1bo1
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["192.168.12.244", "localhost", "127.0.0.1"]
+
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME":     config("DB_NAME"),
+        "USER":     config("DB_USER"),
+        "PASSWORD": config("DB_PASSWORD"),
+        "HOST":     config("DB_HOST", default="localhost"),
+        "PORT":     config("DB_PORT", default="5432"),
+    }
+}
+
+WAZUH_INDEXER = {
+    "HOST":         config("WAZUH_HOST"),
+    "PORT":         config("WAZUH_PORT", cast=int, default=9200),
+    "USER":         config("WAZUH_USER"),
+    "PASSWORD":     config("WAZUH_PASSWORD"),
+    "USE_SSL":      config("WAZUH_USE_SSL", cast=bool, default=True),
+    "VERIFY_CERTS": config("WAZUH_VERIFY_CERTS", cast=bool, default=False),
+    "INDEX":        config("WAZUH_INDEX", default="wazuh-alerts-*"),
+}
 
 
 # Application definition
@@ -37,6 +59,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'logs',
 ]
 
 MIDDLEWARE = [
@@ -72,12 +95,12 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
+#     }
+# }
 
 
 # Password validation
