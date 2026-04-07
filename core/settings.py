@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'logs',
+    'knowledge_base'
 ]
 
 MIDDLEWARE = [
@@ -120,6 +121,12 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+# 2. Add Google Service Account path
+GOOGLE_SERVICE_ACCOUNT_FILE = config("GOOGLE_SERVICE_ACCOUNT_FILE")
+
+# 3. Add Gemini API key
+GEMINI_API_KEY = config("GEMINI_API_KEY")
 
 
 # Internationalization

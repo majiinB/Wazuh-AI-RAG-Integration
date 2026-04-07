@@ -2,7 +2,7 @@ import logging
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from google import genai
+from google.genai import genai
 
 
 logger = logging.getLogger(__name__)
