@@ -15,6 +15,9 @@ class GeminiAIService:
 		self.model_name = model_name or getattr(
 			settings, "GEMINI_MODEL", "gemini-3-flash-preview"
 		)
+		self.embedding_model = getattr(
+			settings, "GEMINI_EMBEDDING_MODEL", "gemini-embedding-001"
+		)
 		self.client = None
 
 	def generate_content(self, prompt):
@@ -40,6 +43,38 @@ class GeminiAIService:
 			logger.exception("Gemini content generation failed")
 			raise
 
-	def explain_ai_in_few_words(self):
-		"""Convenience method mirroring your sample prompt."""
-		return self.generate_content("Explain how AI works in a few words")
+
+	def embed_content(self, text, model_name=None):
+		"""Generate embeddings for input text using Gemini."""
+		if not text or not str(text).strip():
+			raise ValueError("Text cannot be empty.")
+
+		if not getattr(settings, "GEMINI_API_KEY", None):
+			raise ImproperlyConfigured(
+				"GEMINI_API_KEY is not configured. Set it in environment variables."
+			)
+
+		if self.client is None:
+			self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+		target_model = model_name or self.embedding_model
+
+		try:
+			result = self.client.models.embed_content(
+				model=target_model,
+				contents=str(text).strip(),
+			)
+
+			embeddings = []
+			for item in getattr(result, "embeddings", []) or []:
+				values = getattr(item, "values", None)
+				if values is not None:
+					embeddings.append(values)
+
+			if embeddings:
+				return embeddings
+
+			return getattr(result, "embeddings", [])
+		except Exception:
+			logger.exception("Gemini embedding generation failed")
+			raise

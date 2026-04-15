@@ -47,3 +47,49 @@ class GeminiGenerateView(APIView):
 				{"error": "Gemini generation failed."},
 				status=status.HTTP_502_BAD_GATEWAY,
 			)
+
+
+class GeminiEmbedView(APIView):
+	"""Test endpoint for Gemini embeddings."""
+
+	permission_classes = [AllowAny]
+
+	def post(self, request):
+		text = request.data.get("text")
+		model = request.data.get("model")
+
+		if not text or not str(text).strip():
+			return Response(
+				{"error": "'text' is required."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		try:
+			service = GeminiAIService()
+			embeddings = service.embed_content(text=text, model_name=model)
+			first_embedding = embeddings[0] if embeddings else []
+			return Response(
+				{
+					"text": str(text).strip(),
+					"model": model or service.embedding_model,
+					"embedding_count": len(embeddings),
+					"embedding_dimensions": len(first_embedding),
+					"embeddings": embeddings,
+				},
+				status=status.HTTP_200_OK,
+			)
+		except ImproperlyConfigured as exc:
+			return Response(
+				{"error": str(exc)},
+				status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+			)
+		except ValueError as exc:
+			return Response(
+				{"error": str(exc)},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+		except Exception:
+			return Response(
+				{"error": "Gemini embedding failed."},
+				status=status.HTTP_502_BAD_GATEWAY,
+			)
