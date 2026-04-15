@@ -12,6 +12,7 @@ Endpoints:
   GET  /api/logs/health/                  — OpenSearch connection health check
 """
 
+import json
 import logging
 
 from django.utils import timezone
@@ -58,11 +59,14 @@ class IntegratorIngestView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        remote_ip = _get_client_ip(request)
         payload = request.data
+
+        # Uncomment to log full request context for troubleshooting (be cautious of sensitive data):
+        # _log_ingest_request(request=request, remote_ip=remote_ip, payload=payload)
+
         if not payload:
             return Response({"error": "Empty payload"}, status=status.HTTP_400_BAD_REQUEST)
-
-        remote_ip = _get_client_ip(request)
 
         try:
             result = process_integrator_payload(payload, remote_ip=remote_ip)
@@ -269,3 +273,27 @@ def _parse_dt(value):
         return dt
     except Exception:
         return None
+
+
+def _log_ingest_request(request, remote_ip, payload):
+    """Log full webhook request context for troubleshooting."""
+    try:
+        raw_body = request.body.decode("utf-8", errors="replace") if request.body else ""
+    except Exception:
+        raw_body = "<unavailable>"
+
+    request_snapshot = {
+        "method": request.method,
+        "path": request.path,
+        "query_params": dict(request.query_params),
+        "remote_ip": remote_ip,
+        "content_type": request.content_type,
+        "headers": dict(request.headers),
+        "raw_body": raw_body,
+        "parsed_payload": payload,
+    }
+
+    logger.info(
+        "Wazuh ingest request received: %s",
+        json.dumps(request_snapshot, default=str),
+    )

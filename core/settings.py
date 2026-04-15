@@ -26,7 +26,7 @@ SECRET_KEY = 'django-insecure-i3$b-7tt9j(wo8hj081@_j-^uo3#bqt5=h9j()s$4)jy2b1bo1
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["192.168.12.244", "localhost", "127.0.0.1"]
+ALLOWED_HOSTS = ["192.168.12.63", "localhost", "127.0.0.1"]
 
 DATABASES = {
     "default": {
@@ -60,7 +60,8 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'logs',
-    'knowledge_base'
+    'knowledge_base',
+    'ai'
 ]
 
 MIDDLEWARE = [
@@ -145,3 +146,31 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+        },
+    },
+    "loggers": {
+        "logs": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "WARNING",
+    },
+}

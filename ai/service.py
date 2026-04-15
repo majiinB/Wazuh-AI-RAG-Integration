@@ -2,7 +2,7 @@ import logging
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from google.genai import genai
+import google.genai as genai
 
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ class GeminiAIService:
 		self.model_name = model_name or getattr(
 			settings, "GEMINI_MODEL", "gemini-3-flash-preview"
 		)
-		self.client = genai.Client()
+		self.client = None
 
 	def generate_content(self, prompt):
 		"""Generate text from a prompt using Gemini."""
@@ -26,6 +26,9 @@ class GeminiAIService:
 			raise ImproperlyConfigured(
 				"GEMINI_API_KEY is not configured. Set it in environment variables."
 			)
+
+		if self.client is None:
+			self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 		try:
 			response = self.client.models.generate_content(

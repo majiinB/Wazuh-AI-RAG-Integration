@@ -57,7 +57,7 @@ def process_integrator_payload(payload: dict, remote_ip: str = None) -> dict:
         # ingest_record.was_stored = False
         # ingest_record.skip_reason = f"below_threshold (level={level})"
         # ingest_record.save()
-        # logger.debug(f"Skipped alert level={level} — below threshold {HIGH_SEVERITY_THRESHOLD}")
+        logger.debug(f"Skipped alert level={level} — below threshold {HIGH_SEVERITY_THRESHOLD}")
         return {"stored": False, "alert_id": None, "skip_reason": ingest_record.skip_reason}
 
     # --- Step 3: Normalize and save Alert ---
