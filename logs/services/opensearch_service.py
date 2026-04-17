@@ -126,6 +126,106 @@ def search_alerts(
         raise
 
 
+def search_alerts_by_iocs(iocs: dict, size: int = 20) -> dict:
+    """
+    Query OpenSearch for alerts correlated with extracted IOC fields.
+
+    Uses strict baseline filters when available (rule_id/agent_id/decoder_name)
+    and optional IOC hints as should-clauses to improve semantic matching.
+    """
+    client = _get_client()
+    index = settings.WAZUH_INDEXER.get("INDEX", "wazuh-alerts-*")
+
+    tier_1 = iocs.get("tier_1", {})
+    tier_2 = iocs.get("tier_2", {})
+    tier_3 = iocs.get("tier_3", {})
+
+    filter_clauses = []
+    should_clauses = []
+
+    rule_id = tier_1.get("rule_id")
+    if rule_id:
+        filter_clauses.append({"term": {"rule.id": str(rule_id)}})
+
+    agent_id = tier_1.get("agent_id")
+    if agent_id:
+        filter_clauses.append({"term": {"agent.id": str(agent_id)}})
+
+    decoder_name = tier_1.get("decoder_name")
+    if decoder_name:
+        filter_clauses.append({"term": {"decoder.name": str(decoder_name)}})
+
+    rule_groups = tier_1.get("rule_groups") or []
+    if rule_groups:
+        should_clauses.append({"terms": {"rule.groups": rule_groups}})
+
+    mitre_ids = tier_2.get("rule_mitre_id")
+    if mitre_ids:
+        values = mitre_ids if isinstance(mitre_ids, list) else [mitre_ids]
+        should_clauses.append({"terms": {"rule.mitre.id": values}})
+
+    mitre_tactics = tier_2.get("rule_mitre_tactic")
+    if mitre_tactics:
+        values = mitre_tactics if isinstance(mitre_tactics, list) else [mitre_tactics]
+        should_clauses.append({"terms": {"rule.mitre.tactic": values}})
+
+    mitre_techniques = tier_2.get("rule_mitre_technique")
+    if mitre_techniques:
+        values = mitre_techniques if isinstance(mitre_techniques, list) else [mitre_techniques]
+        should_clauses.append({"terms": {"rule.mitre.technique": values}})
+
+    for ioc_key, field in (
+        ("src_ip", "data.srcip"),
+        ("dst_ip", "data.dstip"),
+        ("src_user", "data.srcuser"),
+        ("dst_user", "data.dstuser"),
+        ("src_port", "data.srcport"),
+        ("dst_port", "data.dstport"),
+        ("location", "location"),
+    ):
+        value = tier_2.get(ioc_key)
+        if value:
+            should_clauses.append({"term": {field: value}})
+
+    for ioc_key, field in (
+        ("command", "data.command"),
+        ("tty", "data.tty"),
+        ("pwd", "data.pwd"),
+    ):
+        value = tier_3.get(ioc_key)
+        if value:
+            should_clauses.append({"term": {field: value}})
+
+    bool_query = {
+        "filter": filter_clauses,
+        "should": should_clauses,
+    }
+
+    if should_clauses:
+        bool_query["minimum_should_match"] = 1
+
+    if not filter_clauses and not should_clauses:
+        bool_query = {"must": [{"match_none": {}}]}
+
+    body = {
+        "query": {"bool": bool_query},
+        "sort": [{"timestamp": {"order": "desc"}}],
+        "size": size,
+    }
+
+    try:
+        response = client.search(index=index, body=body)
+        hits = response["hits"]["hits"]
+        total = response["hits"]["total"]["value"]
+        return {
+            "total": total,
+            "hits": [h["_source"] for h in hits],
+        }
+    except OpenSearchException as e:
+        logger.error(f"OpenSearch IOC correlation query failed: {e}")
+        raise
+
+
 def get_alert_by_id(alert_id: str) -> Optional[dict]:
     """Fetch a single alert from the Wazuh Indexer by its _id."""
     client = _get_client()

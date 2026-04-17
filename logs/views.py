@@ -70,6 +70,7 @@ class IntegratorIngestView(APIView):
 
         try:
             result = process_integrator_payload(payload, remote_ip=remote_ip)
+            logger.info("Wazuh ingest processed result: %s", json.dumps(result, default=str))
             return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
             logger.error(f"Ingest error: {e}", exc_info=True)
@@ -122,7 +123,7 @@ class AlertAcknowledgeView(APIView):
     PATCH /api/logs/alerts/{pk}/acknowledge/
     Body: { "is_acknowledged": true, "notes": "Investigated, false positive" }
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def patch(self, request, pk):
         try:
@@ -161,7 +162,7 @@ class OpenSearchQueryView(APIView):
         sort_by=timestamp
         sort_order=desc
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def get(self, request):
         params = request.query_params
@@ -207,7 +208,7 @@ class OpenSearchTopAgentsView(APIView):
     GET /api/logs/search/top-agents/?size=10&from=2024-05-01T00:00:00
     Returns top agents by alert count from the Wazuh Indexer.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def get(self, request):
         from_dt = _parse_dt(request.query_params.get("from"))
