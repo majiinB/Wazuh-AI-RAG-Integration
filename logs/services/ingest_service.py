@@ -18,26 +18,30 @@ Wazuh Integrator sends a JSON payload like:
 
 import logging
 from datetime import datetime
+from time import sleep
 from typing import Any
 
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
 from logs.models import Alert, IntegratorIngest
-from logs.services.opensearch_service import search_alerts_by_iocs
+from logs.services.opensearch_service import build_attack_sessions, search_alerts_by_iocs
 
 logger = logging.getLogger(__name__)
 
 # Only persist alerts at or above this rule level
 HIGH_SEVERITY_THRESHOLD = 10
 
+# Correlation retries to absorb indexer ingest lag after webhook trigger.
+CORRELATION_BACKOFF_SCHEDULE_SECONDS = (0.75, 1.5, 3.0)
+
 
 def process_integrator_payload(payload: dict, remote_ip: str = None) -> dict:
     """
     Main entry point called by the webhook view.
 
-    1. Saves raw payload to IntegratorIngest (audit log).
-    2. Extracts IOC/context fields from payload using tiered mapping.
+    1. Extracts IOC/context fields from payload using tiered mapping.
+    2. Constructs a retrieval query for correlated alerts.
     3. Returns IOC payload and constructed retrieval query.
 
     Returns:
@@ -65,13 +69,30 @@ def process_integrator_payload(payload: dict, remote_ip: str = None) -> dict:
         "count": 0,
         "results": [],
     }
+    attack_sessions = []
+    llm_story_skeleton = {
+        "sessions": [],
+        "kept_session_count": 0,
+        "total_session_count": 0,
+    }
     try:
-        correlated = search_alerts_by_iocs(iocs=iocs, size=20)
+        correlated = _search_correlated_with_backoff(iocs=iocs, size=100)
         correlation = {
             "total": correlated["total"],
-            "count": len(correlated["hits"]),
-            "results": correlated["hits"],
+            "hit_count": len(correlated["hits"]),
+            "results": {
+                "unique_event_types": correlated["unique_event_types"],
+                "dedup_correlated": correlated["deduplicated"],
+                "ranked_hits_deduplicated": correlated.get("ranked_hits_deduplicated", []),
+                "min_should_match_used": correlated.get("min_should_match_used"),
+            },
         }
+
+        attack_sessions = build_attack_sessions(
+            deduplicated=correlated["deduplicated"],
+            tactics_progression=correlated["tactics_progression"],
+        )
+        llm_story_skeleton = build_llm_story_skeleton(attack_sessions)
     except Exception as exc:
         logger.warning("IOC correlation query failed: %s", exc)
         correlation["error"] = str(exc)
@@ -87,6 +108,137 @@ def process_integrator_payload(payload: dict, remote_ip: str = None) -> dict:
         "iocs": iocs,
         "constructed_query": constructed_query,
         "correlation": correlation,
+        "attack_sessions": attack_sessions,
+        "llm_story_skeleton": llm_story_skeleton,
+    }
+
+
+def _search_correlated_with_backoff(iocs: dict, size: int = 100) -> dict:
+    """
+    Retry correlation query with exponential-ish backoff to allow indexer refresh.
+
+    Stops early as soon as the trigger rule appears in correlated deduplicated hits.
+    """
+    trigger_rule_id = str((iocs.get("tier_1") or {}).get("rule_id") or "")
+    attempts = len(CORRELATION_BACKOFF_SCHEDULE_SECONDS) + 1
+    last_result = None
+
+    for attempt in range(attempts):
+        correlated = search_alerts_by_iocs(iocs=iocs, size=size)
+        last_result = correlated
+
+        if not trigger_rule_id or _has_trigger_rule(correlated=correlated, trigger_rule_id=trigger_rule_id):
+            if attempt > 0:
+                logger.info(
+                    "Trigger rule %s became visible after %s correlation retry attempt(s)",
+                    trigger_rule_id,
+                    attempt,
+                )
+            return correlated
+
+        if attempt < len(CORRELATION_BACKOFF_SCHEDULE_SECONDS):
+            delay_seconds = CORRELATION_BACKOFF_SCHEDULE_SECONDS[attempt]
+            logger.info(
+                "Trigger rule %s not yet visible in correlation results; retrying in %.2fs",
+                trigger_rule_id,
+                delay_seconds,
+            )
+            sleep(delay_seconds)
+
+    return last_result
+
+
+def _has_trigger_rule(correlated: dict, trigger_rule_id: str) -> bool:
+    """Check if deduplicated correlated results include the triggering rule id."""
+    for group in correlated.get("deduplicated", []):
+        if str(group.get("rule_id") or "") == trigger_rule_id:
+            return True
+    return False
+
+
+def build_llm_story_skeleton(attack_sessions: list) -> dict:
+    """
+    Build an LLM-ready narrative skeleton from attack sessions.
+
+    Filtering rules:
+    - Keep sessions with confidence in {high, medium}
+    - OR keep sessions with max_severity >= 5
+
+    Output intentionally excludes raw/debug retrieval fields.
+    """
+
+    def summarize_event_group(group: dict) -> str:
+        """
+        Build a generic, alert-agnostic event sentence for LLM narrative input.
+        """
+        count = group.get("occurrences", 1) or 1
+        description = (group.get("rule_description") or "Unknown event").strip()
+
+        context_parts = []
+        src_user = group.get("src_user")
+        dst_user = group.get("dst_user")
+        src_ip = group.get("src_ip")
+        dst_ip = group.get("dst_ip")
+        command = group.get("command")
+        tactics = group.get("mitre_tactic") or []
+
+        if src_user and dst_user:
+            context_parts.append(f"actor={src_user} target={dst_user}")
+        elif src_user:
+            context_parts.append(f"actor={src_user}")
+        elif dst_user:
+            context_parts.append(f"target={dst_user}")
+
+        if src_ip and dst_ip:
+            context_parts.append(f"network={src_ip}->{dst_ip}")
+        elif src_ip:
+            context_parts.append(f"src_ip={src_ip}")
+        elif dst_ip:
+            context_parts.append(f"dst_ip={dst_ip}")
+
+        if command:
+            context_parts.append(f"command={command}")
+
+        if tactics:
+            context_parts.append("tactic=" + ", ".join(str(t) for t in tactics))
+
+        if context_parts:
+            return f"{count}x {description} ({'; '.join(context_parts)})"
+        return f"{count}x {description}"
+
+    total_sessions = len(attack_sessions or [])
+    kept_sessions = []
+
+    for session in attack_sessions or []:
+        confidence = (session.get("confidence") or "").lower()
+        max_level = session.get("max_severity") or 0
+        if confidence not in {"high", "medium"} and max_level < 5:
+            continue
+
+        event_groups = session.get("event_groups") or []
+        event_summary = [summarize_event_group(group) for group in event_groups]
+
+        kept_sessions.append({
+            "actor": session.get("actor"),
+            "host": session.get("host"),
+            "time_window": {
+                "start": session.get("start_time"),
+                "end": session.get("end_time"),
+                "duration_minutes": session.get("duration_minutes"),
+            },
+            "severity": {
+                "max_level": max_level,
+                "confidence": session.get("confidence"),
+            },
+            "attack_chain": session.get("attack_chain") or [],
+            "mitre_ids": session.get("mitre_ids") or [],
+            "event_summary": event_summary,
+        })
+
+    return {
+        "sessions": kept_sessions,
+        "kept_session_count": len(kept_sessions),
+        "total_session_count": total_sessions,
     }
 
 

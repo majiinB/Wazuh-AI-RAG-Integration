@@ -27,6 +27,7 @@ from rest_framework.generics import ListAPIView, RetrieveAPIView
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 
+from ai.service import GeminiAIService
 from .models import Alert
 from .serializers import (
     AlertSerializer,
@@ -36,10 +37,13 @@ from .serializers import (
 from .services.ingest_service import process_integrator_payload
 from .services.opensearch_service import (
     search_alerts,
+    search_alerts_by_iocs,
     get_top_agents,
     get_rule_level_distribution,
     check_connection,
 )
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +73,32 @@ class IntegratorIngestView(APIView):
             return Response({"error": "Empty payload"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            result = process_integrator_payload(payload, remote_ip=remote_ip)
-            logger.info("Wazuh ingest processed result: %s", json.dumps(result, default=str))
-            return Response(result, status=status.HTTP_200_OK)
+            # Extract IOCs and context, construct retrieval query, and (optionally) persist high-severity alerts.
+            payload_result = process_integrator_payload(payload, remote_ip=remote_ip)
+            logger.info("Wazuh ingest processed result: %s", json.dumps(payload_result, default=str))
+
+            llm_narrative = None
+            try:
+                trigger_alert = _build_trigger_alert_for_llm(payload_result)
+                session = _pick_session_for_llm(payload_result)
+                if session:
+                    llm_narrative = GeminiAIService().generate_security_event_narrative(
+                        trigger_alert=trigger_alert,
+                        attack_session=session,
+                    )
+                    logger.info("LLM narrative generated: %s", llm_narrative)
+                else:
+                    logger.info("LLM narrative skipped: no eligible session in llm_story_skeleton")
+
+                
+            except Exception as llm_exc:
+                logger.warning("LLM narrative generation failed: %s", llm_exc, exc_info=True)
+
+            if llm_narrative:
+                payload_result["llm_narrative"] = llm_narrative
+
+    
+            return Response(payload_result, status=status.HTTP_200_OK)
         except Exception as e:
             logger.error(f"Ingest error: {e}", exc_info=True)
             return Response(
@@ -298,3 +325,37 @@ def _log_ingest_request(request, remote_ip, payload):
         "Wazuh ingest request received: %s",
         json.dumps(request_snapshot, default=str),
     )
+
+
+def _build_trigger_alert_for_llm(payload_result):
+    """Extract trigger-alert fields for AI narrative prompt input."""
+    iocs = payload_result.get("iocs", {})
+    tier_1 = iocs.get("tier_1", {})
+    tier_2 = iocs.get("tier_2", {})
+    tier_3 = iocs.get("tier_3", {})
+    return {
+        "rule_description": tier_1.get("rule_description"),
+        "rule_level": tier_1.get("rule_level"),
+        "timestamp": tier_1.get("timestamp"),
+        "src_user": tier_2.get("src_user"),
+        "dst_user": tier_2.get("dst_user"),
+        "command": tier_3.get("command"),
+        "mitre_technique": tier_2.get("rule_mitre_technique"),
+        "mitre_tactic": tier_2.get("rule_mitre_tactic"),
+    }
+
+
+def _pick_session_for_llm(payload_result):
+    """Pick the highest-confidence, highest-severity session for narrative generation."""
+    sessions = ((payload_result.get("llm_story_skeleton") or {}).get("sessions") or [])
+    if not sessions:
+        return None
+
+    confidence_rank = {"high": 3, "medium": 2, "low": 1}
+
+    def session_key(session):
+        severity = ((session.get("severity") or {}).get("max_level") or 0)
+        confidence = ((session.get("severity") or {}).get("confidence") or "").lower()
+        return (confidence_rank.get(confidence, 0), severity)
+
+    return sorted(sessions, key=session_key, reverse=True)[0]
