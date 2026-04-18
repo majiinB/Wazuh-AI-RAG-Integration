@@ -49,6 +49,9 @@ WAZUH_INDEXER = {
     "INDEX":        config("WAZUH_INDEX", default="wazuh-alerts-*"),
 }
 
+ALERTS_CLIENT_CALLBACK_URL = config("ALERTS_CLIENT_CALLBACK_URL", default="")
+ALERTS_CLIENT_CALLBACK_TIMEOUT = config("ALERTS_CLIENT_CALLBACK_TIMEOUT", cast=float, default=5.0)
+
 
 # Application definition
 
@@ -60,6 +63,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'logs',
+    'alerts',
     'knowledge_base',
     'ai'
 ]

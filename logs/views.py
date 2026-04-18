@@ -27,6 +27,7 @@ from rest_framework.generics import ListAPIView, RetrieveAPIView
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 
+from alerts.services.analysis_notification_service import notify_client_analysis_complete
 from ai.service import GeminiAIService
 from .models import Alert
 from .serializers import (
@@ -96,6 +97,13 @@ class IntegratorIngestView(APIView):
 
             if llm_narrative:
                 payload_result["llm_narrative"] = llm_narrative
+
+            notification_result = notify_client_analysis_complete(
+                payload_result=payload_result,
+                llm_narrative=llm_narrative,
+            )
+            payload_result["analysis_notification"] = notification_result
+            logger.info("Client analysis notification result: %s", json.dumps(notification_result, default=str))
 
     
             return Response(payload_result, status=status.HTTP_200_OK)
