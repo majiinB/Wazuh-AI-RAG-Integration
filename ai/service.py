@@ -38,6 +38,14 @@ class GeminiAIService:
 "recommended_actions": [
 "action 1",
 "action 2"
+],
+
+"retrieved_references": [
+{
+"title": "string",
+"source_url": "string",
+"file_kind": "string",
+}
 ]
 
 }"""
@@ -110,12 +118,14 @@ class GeminiAIService:
 			logger.exception("Gemini embedding generation failed")
 			raise
 
-	def build_security_event_prompt(self, trigger_alert, attack_session):
+	def build_security_event_prompt(self, trigger_alert, attack_session, rag_context=None):
 		"""Build a strict JSON-output prompt for cybersecurity narrative analysis."""
 		if not isinstance(trigger_alert, dict):
 			raise ValueError("trigger_alert must be a dictionary.")
 		if not isinstance(attack_session, dict):
 			raise ValueError("attack_session must be a dictionary.")
+		if rag_context is not None and not isinstance(rag_context, dict):
+			raise ValueError("rag_context must be a dictionary when provided.")
 
 		def _string(value, fallback="unknown"):
 			if value is None:
@@ -135,6 +145,22 @@ class GeminiAIService:
 				return "\n".join(f"- {item}" for item in clean) if clean else "- unknown"
 			text = _string(value)
 			return f"- {text}" if text else "- unknown"
+
+		def _rag_block(value):
+			items = (value or {}).get("results") or []
+			if not items:
+				return "- none"
+
+			lines = []
+			for item in items:
+				title = _string(item.get("title"))
+				kind = _string(item.get("file_kind"))
+				excerpt = _string(item.get("summary_excerpt"))
+				source_url = _string(item.get("source_url"))
+				lines.append(
+					f"- title={title}; file_kind={kind}; source_url={source_url}; excerpt={excerpt}"
+				)
+			return "\n".join(lines)
 
 		time_window = attack_session.get("time_window") or {}
 		severity = attack_session.get("severity") or {}
@@ -187,6 +213,11 @@ Observed Events:
 
 ---
 
+[RETRIEVED KNOWLEDGE CONTEXT]
+{_rag_block(rag_context)}
+
+---
+
 [OUTPUT FORMAT - STRICT JSON]
 
 {self.STRICT_SECURITY_JSON_SCHEMA}
@@ -200,12 +231,16 @@ Observed Events:
 * If information is uncertain, state "unknown"
 * Keep explanations concise but clear
 * Ensure valid JSON (no trailing commas, no comments)
+* Use retrieved knowledge context only as supporting reference, not as proof of unobserved events
+* Include retrieved_references in the output with title and source_url from the retrieved context when available
+* If no retrieved context exists, return an empty retrieved_references array
 """
 
-	def generate_security_event_narrative(self, trigger_alert, attack_session):
+	def generate_security_event_narrative(self, trigger_alert, attack_session, rag_context=None):
 		"""Build the security-analysis prompt and send it to Gemini."""
 		prompt = self.build_security_event_prompt(
 			trigger_alert=trigger_alert,
 			attack_session=attack_session,
+			rag_context=rag_context,
 		)
 		return self.generate_content(prompt)

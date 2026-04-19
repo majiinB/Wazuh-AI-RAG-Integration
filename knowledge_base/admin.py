@@ -5,7 +5,7 @@ Adds "Sync from Google Docs" and "Embed this document" actions in Django Admin.
 """
 from django.contrib import admin, messages
 from django.utils.html import format_html
-from .models import KnowledgeDocument, DocumentChunk
+from .models import KnowledgeDocument, DocumentChunk, KnowledgeFileSummary
 from .services.document_service import sync_document_from_google, embed_document
 
 
@@ -73,3 +73,25 @@ class DocumentChunkAdmin(admin.ModelAdmin):
     def short_content(self, obj):
         return obj.content[:80] + "..." if len(obj.content) > 80 else obj.content
     short_content.short_description = "Content preview"
+
+
+@admin.register(KnowledgeFileSummary)
+class KnowledgeFileSummaryAdmin(admin.ModelAdmin):
+    list_display = [
+        "title",
+        "source_file_name",
+        "source_url",
+        "file_kind",
+        "embedding_ready",
+        "embedded_at",
+        "updated_at",
+    ]
+    list_filter = ["file_kind", "embedded_at"]
+    search_fields = ["title", "source_file_name", "source_url", "summary_excerpt"]
+    readonly_fields = ["embedding", "embedded_at", "created_at", "updated_at"]
+
+    def embedding_ready(self, obj):
+        return obj.embedding is not None
+
+    embedding_ready.boolean = True
+    embedding_ready.short_description = "Embedded"

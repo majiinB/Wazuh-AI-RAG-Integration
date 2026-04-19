@@ -19,12 +19,17 @@ from rest_framework.generics import ListCreateAPIView, RetrieveDestroyAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import KnowledgeDocument, DocumentChunk
-from .serializers import KnowledgeDocumentSerializer, DocumentChunkSerializer
+from .models import KnowledgeDocument, DocumentChunk, KnowledgeFileSummary
+from .serializers import KnowledgeDocumentSerializer, DocumentChunkSerializer, KnowledgeFileSummarySerializer
 from .services.document_service import (
     sync_document_from_google,
     embed_document,
     search_similar_chunks,
+)
+from .services.file_summary_service import (
+    create_summary_with_embedding,
+    reembed_summary,
+    search_similar_summaries,
 )
 from .services.embedding_service import embed_alert_query
 
@@ -194,3 +199,99 @@ class KnowledgeSearchView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class KnowledgeFileSummaryListCreateView(ListCreateAPIView):
+    """
+    GET  /api/knowledge/summaries/  — list stored file summaries/excerpts
+    POST /api/knowledge/summaries/  — create + embed a summary for RAG
+
+    POST body:
+    {
+      "title": "Linux privilege escalation runbook",
+      "source_file_name": "runbook_privesc.md",
+      "file_kind": "runbook",
+      "summary_excerpt": "Steps to contain and investigate sudo abuse...",
+      "metadata": {"source": "internal_wiki", "version": "v2"}
+    }
+    """
+    serializer_class = KnowledgeFileSummarySerializer
+    # permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = KnowledgeFileSummary.objects.all()
+        file_kind = self.request.query_params.get("file_kind")
+        if file_kind:
+            qs = qs.filter(file_kind=file_kind)
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            obj = create_summary_with_embedding(
+                title=serializer.validated_data["title"],
+                source_file_name=serializer.validated_data["source_file_name"],
+                source_url=serializer.validated_data.get("source_url", ""),
+                file_kind=serializer.validated_data.get("file_kind", "other"),
+                summary_excerpt=serializer.validated_data["summary_excerpt"],
+                metadata=serializer.validated_data.get("metadata", {}),
+            )
+        except Exception as exc:
+            logger.error("Failed to create summary embedding: %s", exc, exc_info=True)
+            return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        output = self.get_serializer(obj)
+        return Response(output.data, status=status.HTTP_201_CREATED)
+
+
+class ReembedKnowledgeFileSummaryView(APIView):
+    """POST /api/knowledge/summaries/{pk}/embed/ — recompute summary embedding."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            summary = KnowledgeFileSummary.objects.get(pk=pk)
+        except KnowledgeFileSummary.DoesNotExist:
+            return Response({"error": "Summary not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            summary = reembed_summary(summary)
+        except Exception as exc:
+            logger.error("Failed to re-embed summary %s: %s", pk, exc, exc_info=True)
+            return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(KnowledgeFileSummarySerializer(summary).data)
+
+
+class KnowledgeFileSummarySearchView(APIView):
+    """
+    GET /api/knowledge/summaries/search/?q=privilege+escalation&top_k=5&file_kind=runbook
+
+    Vector-search summaries/excerpts for RAG context retrieval.
+    """
+
+    # permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        query = request.query_params.get("q")
+        if not query:
+            return Response({"error": "q parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        top_k = int(request.query_params.get("top_k", 5))
+        file_kind = request.query_params.get("file_kind")
+
+        try:
+            results = search_similar_summaries(query=query, top_k=top_k, file_kind=file_kind)
+        except Exception as exc:
+            logger.error("Summary vector search failed: %s", exc, exc_info=True)
+            return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        serializer = KnowledgeFileSummarySerializer(results, many=True)
+        return Response({
+            "query": query,
+            "total_results": len(serializer.data),
+            "results": serializer.data,
+        })

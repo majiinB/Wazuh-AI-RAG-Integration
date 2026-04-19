@@ -74,3 +74,33 @@ class DocumentChunk(models.Model):
 
     def __str__(self):
         return f"{self.document.title} — chunk {self.chunk_index}"
+
+
+class KnowledgeFileSummary(models.Model):
+    """
+    Stores a short summary/excerpt of an external file and its embedding for RAG.
+    Typical sources: runbooks, threat intelligence docs, reports.
+    """
+
+    FILE_KINDS = [
+        ("runbook", "Runbook"),
+        ("threat_intelligence", "Threat Intelligence"),
+        ("other", "Other"),
+    ]
+
+    title = models.CharField(max_length=255)
+    source_file_name = models.CharField(max_length=500)
+    source_url = models.URLField(blank=True)
+    file_kind = models.CharField(max_length=32, choices=FILE_KINDS, default="other")
+    summary_excerpt = models.TextField()
+    metadata = models.JSONField(default=dict, blank=True)
+    embedding = VectorField(dimensions=768, null=True, blank=True)
+    embedded_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"[{self.get_file_kind_display()}] {self.title}"

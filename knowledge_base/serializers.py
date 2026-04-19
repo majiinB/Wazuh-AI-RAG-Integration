@@ -2,7 +2,7 @@
 knowledge_base/serializers.py
 """
 from rest_framework import serializers
-from .models import KnowledgeDocument, DocumentChunk
+from .models import KnowledgeDocument, DocumentChunk, KnowledgeFileSummary
 
 
 class KnowledgeDocumentSerializer(serializers.ModelSerializer):
@@ -41,3 +41,27 @@ class DocumentChunkSerializer(serializers.ModelSerializer):
     class Meta:
         model = DocumentChunk
         fields = ["id", "document_title", "chunk_index", "content", "created_at"]
+
+
+class KnowledgeFileSummarySerializer(serializers.ModelSerializer):
+    embedding_ready = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KnowledgeFileSummary
+        fields = [
+            "id",
+            "title",
+            "source_file_name",
+            "source_url",
+            "file_kind",
+            "summary_excerpt",
+            "metadata",
+            "embedding_ready",
+            "embedded_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["embedding_ready", "embedded_at", "created_at", "updated_at"]
+
+    def get_embedding_ready(self, obj):
+        return obj.embedding is not None

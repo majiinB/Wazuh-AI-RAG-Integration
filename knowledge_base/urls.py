@@ -8,6 +8,9 @@ from .views import (
     SyncDocumentView,
     EmbedDocumentView,
     KnowledgeSearchView,
+    KnowledgeFileSummaryListCreateView,
+    ReembedKnowledgeFileSummaryView,
+    KnowledgeFileSummarySearchView,
 )
 
 urlpatterns = [
@@ -16,4 +19,7 @@ urlpatterns = [
     path("documents/<int:pk>/sync/", SyncDocumentView.as_view(), name="kb-document-sync"),
     path("documents/<int:pk>/embed/", EmbedDocumentView.as_view(), name="kb-document-embed"),
     path("search/", KnowledgeSearchView.as_view(), name="kb-search"),
+    path("summaries/", KnowledgeFileSummaryListCreateView.as_view(), name="kb-summary-list"),
+    path("summaries/<int:pk>/embed/", ReembedKnowledgeFileSummaryView.as_view(), name="kb-summary-embed"),
+    path("summaries/search/", KnowledgeFileSummarySearchView.as_view(), name="kb-summary-search"),
 ]

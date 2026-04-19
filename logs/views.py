@@ -29,6 +29,7 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 
 from alerts.services.analysis_notification_service import notify_client_analysis_complete
 from ai.service import GeminiAIService
+from knowledge_base.services.file_summary_service import search_similar_summaries
 from .models import Alert
 from .serializers import (
     AlertSerializer,
@@ -78,6 +79,35 @@ class IntegratorIngestView(APIView):
             payload_result = process_integrator_payload(payload, remote_ip=remote_ip)
             logger.info("Wazuh ingest processed result: %s", json.dumps(payload_result, default=str))
 
+            rag_query = payload_result.get("constructed_query")
+
+            rag_context = {
+                "query": rag_query,
+                "total_results": 0,
+                "results": [],
+            }
+            if rag_query:
+                try:
+                    rag_matches = search_similar_summaries(query=rag_query, top_k=2)
+                    rag_context["results"] = [
+                        {
+                            "id": item.id,
+                            "title": item.title,
+                            "source_file_name": item.source_file_name,
+                            "source_url": item.source_url,
+                            "file_kind": item.file_kind,
+                            "summary_excerpt": item.summary_excerpt,
+                            "metadata": item.metadata,
+                        }
+                        for item in rag_matches
+                    ]
+                    rag_context["total_results"] = len(rag_context["results"])
+                except Exception as rag_exc:
+                    logger.warning("RAG summary retrieval failed: %s", rag_exc, exc_info=True)
+                    rag_context["error"] = str(rag_exc)
+
+            payload_result["rag_context"] = rag_context
+
             llm_narrative = None
             try:
                 trigger_alert = _build_trigger_alert_for_llm(payload_result)
@@ -86,6 +116,7 @@ class IntegratorIngestView(APIView):
                     llm_narrative = GeminiAIService().generate_security_event_narrative(
                         trigger_alert=trigger_alert,
                         attack_session=session,
+                        rag_context=rag_context,
                     )
                     logger.info("LLM narrative generated: %s", llm_narrative)
                 else:
