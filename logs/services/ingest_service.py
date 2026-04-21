@@ -17,6 +17,7 @@ Wazuh Integrator sends a JSON payload like:
 """
 
 import logging
+import os
 from datetime import datetime
 from time import sleep
 from typing import Any
@@ -29,11 +30,45 @@ from logs.services.opensearch_service import build_attack_sessions, search_alert
 
 logger = logging.getLogger(__name__)
 
+
+def _get_env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid integer for %s='%s'; using default=%s", name, raw, default)
+        return default
+
+
+def _get_env_float_tuple(name: str, default: tuple[float, ...]) -> tuple[float, ...]:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+
+    try:
+        values = tuple(float(part.strip()) for part in raw.split(",") if part.strip() != "")
+        if not values:
+            raise ValueError("empty list")
+        return values
+    except ValueError:
+        logger.warning(
+            "Invalid float list for %s='%s'; expected comma-separated numbers, using default=%s",
+            name,
+            raw,
+            default,
+        )
+        return default
+
 # Only persist alerts at or above this rule level
-HIGH_SEVERITY_THRESHOLD = 10
+HIGH_SEVERITY_THRESHOLD = _get_env_int("HIGH_SEVERITY_THRESHOLD", 10)
 
 # Correlation retries to absorb indexer ingest lag after webhook trigger.
-CORRELATION_BACKOFF_SCHEDULE_SECONDS = (0.75, 1.5, 3.0)
+CORRELATION_BACKOFF_SCHEDULE_SECONDS = _get_env_float_tuple(
+    "CORRELATION_BACKOFF_SCHEDULE_SECONDS",
+    (0.75, 1.5, 3.0),
+)
 
 
 def process_integrator_payload(payload: dict, remote_ip: str = None) -> dict:

@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -8,7 +9,21 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 _FILTER_CONFIG: Optional[dict] = None
-_FILTER_PATH = Path(settings.BASE_DIR) / "config" / "exclude_in_query.yaml"
+
+
+def _resolve_filter_path() -> Path:
+    default_path = Path(settings.BASE_DIR) / "config" / "exclude_in_query.yaml"
+    env_path = os.getenv("NOISE_FILTER_CONFIG_PATH", "").strip()
+    if not env_path:
+        return default_path
+
+    configured_path = Path(env_path).expanduser()
+    if configured_path.is_absolute():
+        return configured_path
+    return Path(settings.BASE_DIR) / configured_path
+
+
+_FILTER_PATH = _resolve_filter_path()
 
 
 def _load_config() -> dict:
