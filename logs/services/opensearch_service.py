@@ -26,6 +26,8 @@ from typing import Optional
 from django.conf import settings
 from opensearchpy import OpenSearch, OpenSearchException
 
+from .noise_filter import build_query_exclusions
+
 logger = logging.getLogger(__name__)
 
 
@@ -167,6 +169,8 @@ def search_alerts_by_iocs(
 
     if exclude_alert_id:
         must_not_clauses.append({"term": {"_id": exclude_alert_id}})
+
+    must_not_clauses.extend(build_query_exclusions())
 
     # ----------------------------------------------------------------
     # SHOULD — BOOSTED clauses
@@ -368,23 +372,48 @@ def search_alerts_by_iocs(
         # Problem: attacker changing command or triggering different rule
         #          split the same attack into multiple groups.
         #
-        # New: agent.id + src_user + mitre_tactic
-        # Why: groups by BEHAVIOR (who did what tactic on what machine)
-        #      not by exact rule fired or exact command used.
-        #      A rolling window prevents the same burst from splitting across
-        #      hard bucket boundaries.
-        #
-        # Edge case — no mitre_tactic (e.g. AppArmor DENIED):
-        #      falls back to rule.id so these still group correctly.
+        # New: agent.id + src_user + behavior_key + rule.groups + dst_user(optional)
+        # Why: groups by behavior family with better separation for sudo/su/pam,
+        #      using MITRE technique where available and including privilege target
+        #      users only when relevant.
         # ----------------------------------------------------------------
         def make_signature(alert: dict) -> str:
             tactics = get_field(alert, "rule.mitre.tactic", []) or []
-            tactic_key = ",".join(sorted(tactics)) if tactics else get_field(alert, "rule.id", "")
+            techniques = get_field(alert, "rule.mitre.id", []) or []
+            groups = get_field(alert, "rule.groups", []) or []
+
+            technique_key = ",".join(sorted(techniques)) if techniques else ""
+            tactic_key = ",".join(sorted(tactics)) if tactics else ""
+            behavior_key = technique_key or tactic_key or get_field(alert, "rule.id", "")
+            group_key = ",".join(sorted(groups))
+
+            dst_user = get_field(alert, "data.dstuser", "") or ""
+            priv_targets = {"root", "administrator", "admin", "sudo", "wheel"}
+            dst_key = dst_user if str(dst_user).lower() in priv_targets else ""
+
             return "|".join([
                 str(get_field(alert, "agent.id", "")),
                 str(get_field(alert, "data.srcuser", "")),
-                tactic_key,
+                behavior_key,
+                group_key,
+                dst_key,
             ])
+
+        def get_window_seconds(alert: dict) -> int:
+            level = get_field(alert, "rule.level") or 0
+            try:
+                level = int(level)
+            except Exception:
+                level = 0
+
+            if level >= 12:
+                return 2 * 60
+            elif level >= 8:
+                return 5 * 60
+            elif level >= 5:
+                return 10 * 60
+            else:
+                return 15 * 60
 
         # Rolling-window grouping requires chronological traversal.
         # Keep query ranking for retrieval, then sort selected hits by time for grouping.
@@ -393,7 +422,6 @@ def search_alerts_by_iocs(
             key=lambda alert: get_field(alert, "timestamp", "") or "",
         )
 
-        window_minutes = 15
         groups: dict = {}
 
         for alert in sources_sorted:
@@ -409,7 +437,8 @@ def search_alerts_by_iocs(
                 previous_ts = previous_group.get("last_seen_dt")
                 if previous_ts:
                     delta_seconds = (current_ts - previous_ts).total_seconds()
-                    if delta_seconds <= window_minutes * 60:
+                    window_seconds = get_window_seconds(alert)
+                    if delta_seconds <= window_seconds:
                         matched_group = previous_group
 
             if matched_group:
@@ -531,7 +560,8 @@ def search_alerts_by_iocs(
                 previous_ts = previous_group.get("last_seen_dt")
                 if previous_ts:
                     delta_seconds = (current_ts - previous_ts).total_seconds()
-                    if delta_seconds <= window_minutes * 60:
+                    window_seconds = get_window_seconds(src)
+                    if delta_seconds <= window_seconds:
                         matched_group = previous_group
 
             if matched_group:

@@ -1,0 +1,93 @@
+version: 1
+
+filters:
+
+  rules:
+    ignore_rule_ids:
+      - id: "5715"
+        reason: "PAM session opened — lifecycle noise"
+        query_level: true        # push to OpenSearch must_not
+      - id: "5716"
+        reason: "PAM session closed"
+        query_level: true
+      - id: "5402"
+        reason: "sudo TTY not allocated — noisy, low signal"
+        query_level: false       # post-retrieval only, keep in OS for audit
+
+  actors:
+    ignore_src_users:
+      - user: "lightdm"
+        query_level: true
+        reason: "LightDM display manager — normal system behavior"
+      - user: "_apt"
+        query_level: true
+        reason: "APT package manager"
+      - user: "nobody"
+        query_level: true
+        reason: "Anonymous service account"
+      - user: "daemon"
+        query_level: true
+        reason: "Generic system daemon"
+      - user: "colord"
+        query_level: true
+        reason: "Color management daemon — Linux Mint specific"
+      - user: "syslog"
+        query_level: true
+        reason: "Logging daemon"
+
+  destinations:
+    ignore_dst_users:
+      - user: "lightdm"
+        query_level: true
+        reason: "PAM sessions targeting display manager"
+      - user: "nobody"
+        query_level: true
+      - user: "daemon"
+        query_level: true
+      - user: "messagebus"
+        query_level: true
+        reason: "D-Bus system message bus"
+
+  commands:
+    ignore_commands:
+      - command: "/usr/lib/linuxmint/mintUpdate/dpkg_lock_check.sh"
+        query_level: true
+      - command: "/usr/bin/mint-refresh-cache"
+        query_level: false       # keep in OS, filter post-retrieval for audit
+
+  hosts:
+    ignore_agent_names:
+      - name: "test-agent-01"
+        query_level: true
+    ignore_agent_ids: []
+
+  composite:
+    - name: "mint_updater_daemon"
+      description: "Linux Mint update daemon running as root"
+      query_level: false         # composites are always post-retrieval
+      match_all:
+        src_user: "root"
+        command: "/usr/bin/mint-refresh-cache"
+
+    - name: "apt_daily_root"
+      description: "APT daily maintenance"
+      query_level: false
+      match_all:
+        src_user: "root"
+        command: "/usr/lib/apt/apt.systemd.daily"
+
+    # LightDM unlocking its own session — not an attacker
+    - name: "lightdm_self_auth"
+      description: "LightDM display manager authenticating to itself"
+      query_level: false
+      match_all:
+        src_user: "lightdm"
+        dst_user: "lightdm"
+
+    # LightDM doing root ops — normal display manager behavior
+    - name: "lightdm_to_root"
+      description: "LightDM privilege escalation to root — system behavior not attack"
+      query_level: false
+      match_all:
+        src_user: "lightdm"
+        dst_user: "root"
