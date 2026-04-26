@@ -204,8 +204,25 @@ class GeminiAIService:
 				)
 			return "\n".join(lines)
 
+		def _network_block(value):
+			if not isinstance(value, dict) or not value:
+				return "- none"
+
+			lines = []
+			for key in ("agent_ip", "src_ip", "dst_ip"):
+				entry = value.get(key)
+				if entry:
+					lines.append(f"- {key}={_string(entry)}")
+
+			session_source_ips = value.get("session_source_ips") or []
+			if session_source_ips:
+				lines.append(f"- session_source_ips={_csv(session_source_ips)}")
+
+			return "\n".join(lines) if lines else "- none"
+
 		time_window = attack_session.get("time_window") or {}
 		severity = attack_session.get("severity") or {}
+		network_context = attack_session.get("network_context") or {}
 
 		return f"""You are a cybersecurity analyst.
 
@@ -266,6 +283,10 @@ Severity:
 
 * Max Alert Level: {_string(severity.get("max_level"))}
 * Confidence: {_string(severity.get("confidence"))}
+
+Network Context:
+
+{_network_block(network_context)}
 
 Attack Chain:
 {_list_block(attack_session.get("attack_chain"))}

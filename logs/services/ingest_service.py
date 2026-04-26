@@ -127,7 +127,7 @@ def process_integrator_payload(payload: dict, remote_ip: str = None) -> dict:
             deduplicated=correlated["deduplicated"],
             tactics_progression=correlated["tactics_progression"],
         )
-        llm_story_skeleton = build_llm_story_skeleton(attack_sessions)
+        llm_story_skeleton = build_llm_story_skeleton(attack_sessions, iocs=iocs)
     except Exception as exc:
         logger.warning("IOC correlation query failed: %s", exc)
         correlation["error"] = str(exc)
@@ -191,7 +191,7 @@ def _has_trigger_rule(correlated: dict, trigger_rule_id: str) -> bool:
     return False
 
 
-def build_llm_story_skeleton(attack_sessions: list) -> dict:
+def build_llm_story_skeleton(attack_sessions: list, iocs: dict | None = None) -> dict:
     """
     Build an LLM-ready narrative skeleton from attack sessions.
 
@@ -241,6 +241,7 @@ def build_llm_story_skeleton(attack_sessions: list) -> dict:
             return f"{count}x {description} ({'; '.join(context_parts)})"
         return f"{count}x {description}"
 
+    tier_2_iocs = ((iocs or {}).get("tier_2") or {}) if isinstance(iocs, dict) else {}
     total_sessions = len(attack_sessions or [])
     kept_sessions = []
 
@@ -252,6 +253,21 @@ def build_llm_story_skeleton(attack_sessions: list) -> dict:
 
         event_groups = session.get("event_groups") or []
         event_summary = [summarize_event_group(group) for group in event_groups]
+
+        session_source_ips = sorted(
+            {
+                str(group.get("src_ip")).strip()
+                for group in event_groups
+                if group.get("src_ip") not in (None, "")
+            }
+        )
+
+        network_context = _drop_empty({
+            "agent_ip": tier_2_iocs.get("agent_ip"),
+            "src_ip": tier_2_iocs.get("src_ip"),
+            "dst_ip": tier_2_iocs.get("dst_ip"),
+            "session_source_ips": session_source_ips,
+        })
 
         kept_sessions.append({
             "actor": session.get("actor"),
@@ -265,6 +281,7 @@ def build_llm_story_skeleton(attack_sessions: list) -> dict:
                 "max_level": max_level,
                 "confidence": session.get("confidence"),
             },
+            "network_context": network_context,
             "attack_chain": session.get("attack_chain") or [],
             "mitre_ids": session.get("mitre_ids") or [],
             "event_summary": event_summary,

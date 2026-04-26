@@ -46,6 +46,7 @@ def build_analysis_notification_payload(payload_result: dict, llm_narrative: str
         incident_payload = _parse_incident_payload(payload_result.get("llm_narrative"))
 
     if incident_payload is not None:
+        incident_payload["iocs"] = payload_result.get("iocs", {})
         return incident_payload
 
     logger.warning("LLM narrative is unavailable or invalid JSON; sending minimal fallback payload")
@@ -85,6 +86,7 @@ def build_analysis_notification_payload(payload_result: dict, llm_narrative: str
             "Structured incident narrative from AI service.",
         ],
         "retrieved_references": [],
+        "iocs": payload_result.get("iocs", {}),
     }
 
 
@@ -104,6 +106,8 @@ def notify_client_analysis_complete(payload_result: dict, llm_narrative: str = N
         payload_result=payload_result,
         llm_narrative=llm_narrative,
     )
+    logger.info("Sending analysis notification to client: %s", json.dumps(payload, default=str))
+
 
     try:
         response = requests.post(callback_url, json=payload, timeout=timeout)

@@ -91,10 +91,9 @@ class IntegratorIngestView(APIView):
 
             # Extract IOCs and context, construct retrieval query, and (optionally) persist high-severity alerts.
             payload_result = process_integrator_payload(payload, remote_ip=remote_ip)
-            logger.info("Wazuh ingest processed result: %s", json.dumps(payload_result, default=str))
+            # logger.info("Wazuh ingest processed result: %s", json.dumps(payload_result, default=str))
 
             rag_query = payload_result.get("constructed_query")
-
             rag_context = {
                 "query": rag_query,
                 "total_results": 0,
@@ -132,7 +131,7 @@ class IntegratorIngestView(APIView):
                         attack_session=session,
                         rag_context=rag_context,
                     )
-                    logger.info("LLM narrative generated: %s", llm_narrative)
+                    # logger.info("LLM narrative generated: %s", llm_narrative)
                 else:
                     logger.info("LLM narrative skipped: no eligible session in llm_story_skeleton")
 
