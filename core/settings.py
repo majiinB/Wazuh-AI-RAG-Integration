@@ -58,6 +58,7 @@ ALERTS_CLIENT_CALLBACK_URL = config(
     default="http://localhost:3000/api/incidents/webhook",
 )
 ALERTS_CLIENT_CALLBACK_TIMEOUT = config("ALERTS_CLIENT_CALLBACK_TIMEOUT", cast=float, default=5.0)
+NL_QUERY_STRICT_MODE = config("NL_QUERY_STRICT_MODE", cast=bool, default=True)
 
 
 # Application definition

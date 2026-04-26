@@ -1,4 +1,6 @@
 import logging
+import json
+from datetime import datetime, timezone
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -10,6 +12,21 @@ logger = logging.getLogger(__name__)
 
 class GeminiAIService:
 	"""Service class responsible for Gemini AI processing."""
+
+	STRICT_QUERY_COMPILER_SCHEMA = """{
+	"time": {
+		"type": "relative | absolute",
+		"last_minutes": "number | null",
+		"start": "ISO 8601 string | null",
+		"end": "ISO 8601 string | null"
+	},
+	"filters": {
+		"src_user": "string | null",
+		"agent_name": "string | null",
+		"src_ip": "string | null"
+	},
+	"intent": ["timeline", "attack_assessment"]
+}"""
 
 	STRICT_SECURITY_JSON_SCHEMA = """{
 "what_happened": "string",
@@ -353,3 +370,273 @@ TONE: Neutral, analytical, non-alarmist. Empower investigation, not panic.
 			rag_context=rag_context,
 		)
 		return self.generate_content(prompt)
+
+	def build_query_extractor_prompt(self, user_query: str, now_iso: str) -> str:
+		"""Build strict JSON compiler prompt for natural-language security queries."""
+		return f"""You are a query compiler for a security analytics system.
+
+Your task is to convert a natural language query into STRICT structured JSON.
+
+You MUST follow the schema exactly. Do NOT explain. Do NOT add extra fields. Do NOT output anything except valid JSON.
+
+Current UTC time for temporal normalization: {now_iso}
+
+----------------------------------------
+SCHEMA
+
+{self.STRICT_QUERY_COMPILER_SCHEMA}
+
+----------------------------------------
+INSTRUCTIONS
+
+1. TIME EXTRACTION
+
+- Convert ALL time expressions into ONE of the following:
+
+A. Relative time:
+  - Examples:
+    "last 20 minutes"
+    "past hour"
+    "last 5 mins"
+    "past two hours"
+  -> Use:
+    "type": "relative"
+    "last_minutes": <number>
+
+  Rules:
+  - Normalize words to numbers
+  - Convert hours to minutes
+  - Convert seconds to minutes
+
+B. Absolute time:
+  - Examples:
+    "yesterday"
+    "today at 3pm"
+    "between 1am and 4am"
+  -> Use:
+    "type": "absolute"
+    "start": ISO 8601 timestamp
+    "end": ISO 8601 timestamp
+
+- If no time is specified:
+  -> Use:
+    "type": "relative"
+    "last_minutes": 60
+
+- NEVER leave both relative and absolute populated at the same time.
+
+----------------------------------------
+2. FILTER EXTRACTION
+
+Extract the following if present:
+- src_user
+- agent_name
+- src_ip
+
+If not present, set to null.
+
+----------------------------------------
+3. INTENT DETECTION
+
+- "timeline" for what happened/activity/logs/events intent.
+- "attack_assessment" for malicious/suspicious/attack-assessment intent.
+- If both appear, return both.
+
+----------------------------------------
+4. NORMALIZATION RULES
+
+- Convert all numbers to numeric form.
+- Lowercase all extracted string values.
+
+----------------------------------------
+5. STRICT OUTPUT RULES
+
+- Output ONLY valid JSON
+- NO explanations
+- NO comments
+- NO trailing commas
+- NO extra keys
+
+----------------------------------------
+Now process this user query:
+{user_query}
+"""
+
+	def compile_natural_language_query(self, user_query: str) -> dict:
+		"""Compile natural language into normalized strict query JSON."""
+		if not user_query or not str(user_query).strip():
+			raise ValueError("user_query cannot be empty")
+
+		now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+		prompt = self.build_query_extractor_prompt(user_query=str(user_query).strip(), now_iso=now_iso)
+		max_attempts = 3
+		last_parsed = {}
+
+		for attempt in range(1, max_attempts + 1):
+			attempt_prompt = prompt
+			if attempt > 1:
+				attempt_prompt = (
+					f"{prompt}\n\n"
+					"Previous output was invalid or schema-noncompliant. "
+					"Retry and return only strict valid JSON that exactly matches the schema keys and value types."
+				)
+
+			raw = self.generate_content(attempt_prompt)
+			if isinstance(raw, str) and raw.strip().startswith("```"):
+				lines = raw.strip().splitlines()
+				if lines and lines[0].startswith("```"):
+					lines = lines[1:]
+				if lines and lines[-1].strip().startswith("```"):
+					lines = lines[:-1]
+				raw = "\n".join(lines).strip()
+
+			try:
+				parsed = json.loads(raw)
+			except Exception:
+				logger.warning("Query compiler attempt %s/%s returned invalid JSON", attempt, max_attempts)
+				continue
+
+			last_parsed = parsed
+			if self._is_compiled_query_structurally_valid(parsed):
+				return self._normalize_compiled_query(parsed)
+
+			logger.warning(
+				"Query compiler attempt %s/%s returned schema-invalid JSON",
+				attempt,
+				max_attempts,
+			)
+
+		logger.warning("Query compiler exhausted retries; using normalized safe fallback")
+		return self._normalize_compiled_query(last_parsed)
+
+	def _is_compiled_query_structurally_valid(self, data: dict) -> bool:
+		"""Validate strict structure before accepting AI-compiled query output."""
+		if not isinstance(data, dict):
+			return False
+
+		if set(data.keys()) != {"time", "filters", "intent"}:
+			return False
+
+		time = data.get("time")
+		filters = data.get("filters")
+		intent = data.get("intent")
+
+		if not isinstance(time, dict) or set(time.keys()) != {"type", "last_minutes", "start", "end"}:
+			return False
+		if not isinstance(filters, dict) or set(filters.keys()) != {"src_user", "agent_name", "src_ip"}:
+			return False
+		if not isinstance(intent, list):
+			return False
+
+		time_type = str(time.get("type") or "").strip().lower()
+		if time_type not in {"relative", "absolute"}:
+			return False
+
+		last_minutes = time.get("last_minutes")
+		start = time.get("start")
+		end = time.get("end")
+
+		if time_type == "relative":
+			try:
+				float(last_minutes)
+			except (TypeError, ValueError):
+				return False
+			if start is not None or end is not None:
+				return False
+		else:
+			if last_minutes is not None:
+				return False
+			if not (isinstance(start, str) and start.strip() and isinstance(end, str) and end.strip()):
+				return False
+
+		for field in ("src_user", "agent_name", "src_ip"):
+			value = filters.get(field)
+			if value is not None and not isinstance(value, str):
+				return False
+
+		allowed_intents = {"timeline", "attack_assessment"}
+		if not intent:
+			return False
+		for item in intent:
+			if not isinstance(item, str):
+				return False
+			if item.strip().lower() not in allowed_intents:
+				return False
+
+		return True
+
+	def _normalize_compiled_query(self, data: dict) -> dict:
+		"""Validate, normalize, and enforce strict query schema defaults."""
+		default = {
+			"time": {
+				"type": "relative",
+				"last_minutes": 60,
+				"start": None,
+				"end": None,
+			},
+			"filters": {
+				"src_user": None,
+				"agent_name": None,
+				"src_ip": None,
+			},
+			"intent": ["timeline"],
+		}
+
+		if not isinstance(data, dict):
+			return default
+
+		time = data.get("time") if isinstance(data.get("time"), dict) else {}
+		filters = data.get("filters") if isinstance(data.get("filters"), dict) else {}
+		intent = data.get("intent") if isinstance(data.get("intent"), list) else []
+
+		time_type = str(time.get("type") or "").strip().lower()
+		if time_type not in {"relative", "absolute"}:
+			time_type = "relative"
+
+		last_minutes = None
+		if time_type == "relative":
+			try:
+				last_minutes = float(time.get("last_minutes"))
+			except (TypeError, ValueError):
+				last_minutes = 60.0
+			if last_minutes <= 0:
+				last_minutes = 60.0
+
+		start = time.get("start") if time_type == "absolute" else None
+		end = time.get("end") if time_type == "absolute" else None
+		if time_type == "absolute":
+			if not (isinstance(start, str) and start.strip() and isinstance(end, str) and end.strip()):
+				time_type = "relative"
+				last_minutes = 60.0
+				start = None
+				end = None
+
+		def _lower_or_none(value):
+			if value is None:
+				return None
+			text = str(value).strip().lower()
+			return text if text else None
+
+		allowed_intents = {"timeline", "attack_assessment"}
+		normalized_intent = []
+		for item in intent:
+			value = str(item).strip().lower()
+			if value in allowed_intents and value not in normalized_intent:
+				normalized_intent.append(value)
+		if not normalized_intent:
+			normalized_intent = ["timeline"]
+
+		return {
+			"time": {
+				"type": time_type,
+				"last_minutes": last_minutes if time_type == "relative" else None,
+				"start": start if time_type == "absolute" else None,
+				"end": end if time_type == "absolute" else None,
+			},
+			"filters": {
+				"src_user": _lower_or_none(filters.get("src_user")),
+				"agent_name": _lower_or_none(filters.get("agent_name")),
+				"src_ip": _lower_or_none(filters.get("src_ip")),
+			},
+			"intent": normalized_intent,
+		}

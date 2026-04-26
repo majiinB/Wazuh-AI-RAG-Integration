@@ -132,7 +132,10 @@ def search_alerts_by_iocs(
     iocs: dict,
     size: int = 50,
     hours_back: int = 1,
-    exclude_alert_id: str = None
+    exclude_alert_id: str = None,
+    from_dt: Optional[datetime] = None,
+    to_dt: Optional[datetime] = None,
+    min_rule_level: int = 0,
 ) -> dict:
     """
     Query OpenSearch for alerts correlated with extracted IOC fields.
@@ -158,14 +161,39 @@ def search_alerts_by_iocs(
     # ----------------------------------------------------------------
     # MUST — time window only hard constraint
     # ----------------------------------------------------------------
-    must_clauses.append({
-        "range": {
-            "timestamp": {
-                "gte": f"now-{hours_back}h",
-                "lte": "now"
+    if from_dt or to_dt:
+        time_range = {}
+        if from_dt:
+            time_range["gte"] = from_dt.astimezone(timezone.utc).isoformat()
+        if to_dt:
+            time_range["lte"] = to_dt.astimezone(timezone.utc).isoformat()
+        must_clauses.append({"range": {"timestamp": time_range}})
+    else:
+        # OpenSearch date math does not accept decimal units like "-1.0h".
+        # Normalize the relative range to integer minutes (e.g. "-60m").
+        try:
+            relative_minutes = int(round(float(hours_back) * 60.0))
+        except (TypeError, ValueError):
+            relative_minutes = 60
+        relative_minutes = max(relative_minutes, 1)
+
+        must_clauses.append({
+            "range": {
+                "timestamp": {
+                    "gte": f"now-{relative_minutes}m",
+                    "lte": "now"
+                }
             }
-        }
-    })
+        })
+
+    if min_rule_level and int(min_rule_level) > 0:
+        must_clauses.append({
+            "range": {
+                "rule.level": {
+                    "gte": int(min_rule_level),
+                }
+            }
+        })
 
     if exclude_alert_id:
         must_not_clauses.append({"term": {"_id": exclude_alert_id}})
@@ -246,7 +274,7 @@ def search_alerts_by_iocs(
     agent_name = tier_1.get("agent_name")
     if agent_name:
         should_clauses.append({
-            "term": {"agent.name": {"value": agent_name, "boost": 1}}
+            "match": {"agent.name": {"query": agent_name, "boost": 1}}
         })
 
     rule_groups = tier_1.get("rule_groups") or []

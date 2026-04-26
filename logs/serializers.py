@@ -51,6 +51,12 @@ class IntegratorIngestSerializer(serializers.ModelSerializer):
         fields = ["id", "received_at", "remote_ip", "was_stored", "skip_reason"]
 
 
+class NaturalLanguageCorrelationQueryRequestSerializer(serializers.Serializer):
+    """Lightweight request validator for POST /api/nl-query/."""
+
+    query = serializers.CharField(required=True, allow_blank=False, max_length=2000, trim_whitespace=True)
+
+
 class OpenSearchAlertSerializer(serializers.Serializer):
     """
     Serializes raw OpenSearch hits from the Wazuh Indexer.
