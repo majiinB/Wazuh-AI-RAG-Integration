@@ -70,6 +70,10 @@ def build_query_exclusions() -> list[dict]:
         if entry.get("query_level"):
             must_not.append({"term": {"data.srcuser": entry["user"]}})
 
+    for entry in filters.get("actors", {}).get("ignore_dst_users", []):
+        if entry.get("query_level"):
+            must_not.append({"term": {"data.dstuser": entry["user"]}})
+
     for entry in filters.get("commands", {}).get("ignore_commands", []):
         if entry.get("query_level"):
             must_not.append({"term": {"data.command": entry["command"]}})
@@ -84,6 +88,48 @@ def build_query_exclusions() -> list[dict]:
 
     logger.debug("Built %d query-level must_not exclusions from YAML", len(must_not))
     return must_not
+
+
+def should_exclude_query(iocs: dict) -> tuple[bool, str]:
+    """
+    Evaluate extracted IOC fields against query-level exclusions.
+
+    This is used as an early shield before correlation, RAG, or AI work.
+    """
+    config = _load_config()
+    if not config:
+        return False, ""
+
+    filters = config.get("filters", {})
+    tier_1 = iocs.get("tier_1", {}) if isinstance(iocs, dict) else {}
+    tier_2 = iocs.get("tier_2", {}) if isinstance(iocs, dict) else {}
+    tier_3 = iocs.get("tier_3", {}) if isinstance(iocs, dict) else {}
+
+    checks = (
+        ("rule_id", str(tier_1.get("rule_id") or "").strip(), filters.get("rules", {}).get("ignore_rule_ids", []), "id"),
+        ("src_user", str(tier_2.get("src_user") or "").strip(), filters.get("actors", {}).get("ignore_src_users", []), "user"),
+        ("dst_user", str(tier_2.get("dst_user") or "").strip(), filters.get("actors", {}).get("ignore_dst_users", []), "user"),
+        ("command", str(tier_3.get("command") or "").strip(), filters.get("commands", {}).get("ignore_commands", []), "command"),
+        ("agent_name", str(tier_1.get("agent_name") or "").strip(), filters.get("hosts", {}).get("ignore_agent_names", []), "name"),
+        ("agent_id", str(tier_1.get("agent_id") or "").strip(), filters.get("hosts", {}).get("ignore_agent_ids", []), "id"),
+    )
+
+    for field_name, current_value, entries, entry_key in checks:
+        if not current_value:
+            continue
+
+        for entry in entries:
+            if not entry.get("query_level"):
+                continue
+
+            entry_value = str(entry.get(entry_key) or "").strip()
+            if current_value == entry_value:
+                reason = entry.get("reason", "")
+                if reason:
+                    return True, f"{field_name} '{current_value}' matched query-level exclusion — {reason}"
+                return True, f"{field_name} '{current_value}' matched query-level exclusion"
+
+    return False, ""
 
 
 def should_suppress(group: dict) -> tuple[bool, str]:
@@ -102,6 +148,8 @@ def should_suppress(group: dict) -> tuple[bool, str]:
     src_user = str(group.get("src_user") or "").strip()
     command = str(group.get("command") or "").strip()
     agent_name = str(group.get("agent_name") or "").strip()
+    dst_user = str(group.get("dst_user") or "").strip()
+    agent_id = str(group.get("agent_id") or "").strip()
 
     for entry in filters.get("rules", {}).get("ignore_rule_ids", []):
         if not entry.get("query_level") and rule_id == str(entry["id"]):
@@ -111,6 +159,10 @@ def should_suppress(group: dict) -> tuple[bool, str]:
         if not entry.get("query_level") and src_user == entry["user"]:
             return True, f"src_user '{src_user}' in post-retrieval ignore list"
 
+    for entry in filters.get("actors", {}).get("ignore_dst_users", []):
+        if not entry.get("query_level") and dst_user == entry["user"]:
+            return True, f"dst_user '{dst_user}' in post-retrieval ignore list"
+
     for entry in filters.get("commands", {}).get("ignore_commands", []):
         if not entry.get("query_level") and command == entry["command"]:
             return True, f"command '{command}' in post-retrieval ignore list"
@@ -118,6 +170,10 @@ def should_suppress(group: dict) -> tuple[bool, str]:
     for entry in filters.get("hosts", {}).get("ignore_agent_names", []):
         if not entry.get("query_level") and agent_name == entry["name"]:
             return True, f"agent_name '{agent_name}' in post-retrieval ignore list"
+
+    for entry in filters.get("hosts", {}).get("ignore_agent_ids", []):
+        if not entry.get("query_level") and agent_id == str(entry["id"]):
+            return True, f"agent_id '{agent_id}' in post-retrieval ignore list"
 
     for composite in filters.get("composite", []):
         match_all = composite.get("match_all", {})

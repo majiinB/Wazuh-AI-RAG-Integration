@@ -1,41 +1,90 @@
 """Helpers for notifying a client application when analysis completes."""
 
+import json
 import logging
 
 import requests
 from django.conf import settings
-from django.utils import timezone
 
 
 logger = logging.getLogger(__name__)
 
 
-def build_analysis_notification_payload(payload_result: dict, llm_narrative: str = None) -> dict:
-    """Build a compact payload suitable for a frontend callback."""
-    iocs = payload_result.get("iocs", {})
-    trigger = iocs.get("tier_1", {})
-    session = (payload_result.get("llm_story_skeleton") or {}).get("sessions", [])
+def _parse_incident_payload(llm_narrative):
+    """Return a dictionary payload from Gemini JSON narrative output."""
+    if isinstance(llm_narrative, dict):
+        return llm_narrative
 
-    selected_session = session[0] if session else {}
+    if not isinstance(llm_narrative, str):
+        return None
+
+    text = llm_narrative.strip()
+    if not text:
+        return None
+
+    if text.startswith("```"):
+        # Handle optional fenced output from model responses.
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def build_analysis_notification_payload(payload_result: dict, llm_narrative: str = None) -> dict:
+    """Build webhook payload in the strict incident schema expected by the client app."""
+    incident_payload = _parse_incident_payload(llm_narrative)
+
+    if incident_payload is None:
+        incident_payload = _parse_incident_payload(payload_result.get("llm_narrative"))
+
+    if incident_payload is not None:
+        return incident_payload
+
+    logger.warning("LLM narrative is unavailable or invalid JSON; sending minimal fallback payload")
     return {
-        "event_type": "analysis_complete",
-        "generated_at": timezone.now().isoformat(),
-        "trigger_alert": {
-            "rule_description": trigger.get("rule_description"),
-            "rule_level": trigger.get("rule_level"),
-            "timestamp": trigger.get("timestamp"),
-            "agent_name": trigger.get("agent_name"),
-            "decoder_name": trigger.get("decoder_name"),
+        "what_happened": "Unable to generate structured incident narrative.",
+        "observed_activity": {
+            "summary": "No structured incident activity was produced.",
+            "event_timeline": [],
+            "actors_and_targets": {
+                "source_user": "unknown",
+                "target_user": "unknown",
+                "affected_hosts": [],
+            },
         },
-        "attack_session": {
-            "actor": selected_session.get("actor"),
-            "host": selected_session.get("host"),
-            "confidence": (selected_session.get("severity") or {}).get("confidence"),
-            "max_level": (selected_session.get("severity") or {}).get("max_level"),
-            "attack_chain": selected_session.get("attack_chain") or [],
-            "event_summary": selected_session.get("event_summary") or [],
+        "interpretation": {
+            "possible_explanations": [],
         },
-        "llm_narrative": llm_narrative,
+        "related_events": [],
+        "ai_assessment": {
+            "severity": "low",
+            "confidence": "low",
+            "confidence_justification": "Structured AI output was unavailable at notification time.",
+            "hypothesis": "No incident hypothesis could be generated from current data.",
+            "requires_validation": True,
+            "was_successful": "unknown",
+            "indicators_of_success": [],
+        },
+        "recommended_actions": [
+            "Review AI generation logs and retry incident narrative generation.",
+        ],
+        "analyst_guidance": {
+            "priority": "Validate AI output pipeline before triage decisions.",
+            "next_best_action": "Inspect backend logs for model or parsing errors.",
+        },
+        "questions_for_investigation": [],
+        "missing_data_for_confidence": [
+            "Structured incident narrative from AI service.",
+        ],
+        "retrieved_references": [],
     }
 
 

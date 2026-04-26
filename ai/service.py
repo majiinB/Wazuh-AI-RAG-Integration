@@ -14,10 +14,32 @@ class GeminiAIService:
 	STRICT_SECURITY_JSON_SCHEMA = """{
 "what_happened": "string",
 
-"attack_progression": [
-"step 1 description",
-"step 2 description"
-],
+"observed_activity": {
+  "summary": "factual summary of observed events only — no interpretation",
+  "event_timeline": ["event 1", "event 2"],
+  "actors_and_targets": {
+    "source_user": "string",
+    "target_user": "string",
+    "affected_hosts": ["host1", "host2"]
+  }
+},
+
+"interpretation": {
+  "possible_explanations": [
+    {
+      "type": "potentially_malicious",
+      "description": "activity pattern consistent with...",
+			"mitre_relevance": "TXX.XXX",
+			"confidence": "low | moderate | high"
+    },
+    {
+      "type": "benign_alternative",
+      "description": "activity could also indicate...",
+			"likelihood": "why this explanation is plausible",
+			"confidence": "low | moderate | high"
+    }
+  ]
+},
 
 "related_events": [
 {
@@ -28,23 +50,43 @@ class GeminiAIService:
 ],
 
 "ai_assessment": {
-"severity": "low | medium | high | critical",
+"severity": "low | medium | high | critical (critical only for confirmed malicious impact)",
 "confidence": "low | medium | high",
-"likely_intent": "string",
-"was_successful": true | false | "unknown",
-"summary": "short risk summary"
+"confidence_justification": "why this confidence level was assigned; list key signals",
+"hypothesis": "statement of observed pattern as hypothesis, NOT conclusion",
+"requires_validation": true,
+"was_successful": "unknown",
+"indicators_of_success": [
+	"signal that may indicate successful execution without confirming compromise"
+]
 },
 
 "recommended_actions": [
-"action 1",
-"action 2"
+"context-specific investigation step tailored to the observed activity"
+],
+
+"analyst_guidance": {
+	"priority": "case-specific validation priority based on this incident",
+	"next_best_action": "most useful immediate validation step for this incident"
+},
+
+"questions_for_investigation": [
+  {
+    "question": "concrete, specific question",
+    "why": "what this answer tells us",
+    "data_source": "where to look (logs, access patterns, etc.)"
+  }
+],
+
+"missing_data_for_confidence": [
+  "additional signals or context that would increase confidence"
 ],
 
 "retrieved_references": [
 {
 "title": "string",
 "source_url": "string",
-"file_kind": "string",
+"file_kind": "string"
 }
 ]
 
@@ -173,6 +215,29 @@ Your task is to return a STRICT JSON object following the exact schema provided.
 
 ---
 
+[CRITICAL FRAMING]
+
+You are NOT an intrusion detection system and must NOT assert that an attack definitively occurred.
+
+Your role is to:
+- Summarize observed activity based ONLY on the provided structured incident data
+- Interpret patterns as POSSIBLE security-relevant behavior, not confirmed attacks
+- Express uncertainty clearly using probabilistic or conditional language
+
+Strict language rules:
+- DO NOT use: "the attacker did", "the system was compromised", "attack in progress"
+- DO use: "activity consistent with", "may indicate", "could suggest", "requires validation"
+- Treat all conclusions as working hypotheses, not facts
+- Separate observed facts from interpretation
+
+For EVERY potentially malicious interpretation, include at least one plausible benign explanation:
+  - Legitimate admin activity or testing
+  - Scripted provisioning or automation
+  - Misconfiguration or expected system behavior
+  - User error or routine maintenance
+
+---
+
 [TRIGGER ALERT]
 
 * Description: {_string(trigger_alert.get("rule_description"))}
@@ -226,14 +291,37 @@ Observed Events:
 
 [INSTRUCTIONS]
 
-* Base your answer ONLY on the provided data
-* Do NOT hallucinate missing steps
-* If information is uncertain, state "unknown"
-* Keep explanations concise but clear
-* Ensure valid JSON (no trailing commas, no comments)
-* Use retrieved knowledge context only as supporting reference, not as proof of unobserved events
-* Include retrieved_references in the output with title and source_url from the retrieved context when available
-* If no retrieved context exists, return an empty retrieved_references array
+1. observed_activity: Summarize ONLY the factual events from the input. No speculation.
+2. interpretation: List multiple possible explanations, including at least one potentially_malicious and one benign_alternative hypothesis. Assign confidence (low/moderate/high) to EACH hypothesis.
+3. ai_assessment:
+   - confidence_justification: Explain WHY you assigned this confidence level. List key signals.
+   - hypothesis: Frame as a working hypothesis ("activity pattern suggests...", NOT "attack occurred")
+	- requires_validation: Always true unless activity is routine/normal
+	- severity must reflect impact x certainty:
+	  * suspicious but unconfirmed -> medium or high
+	  * strong pattern match + high confidence (still unconfirmed) -> high
+	  * confirmed malicious impact only -> critical
+	- was_successful must remain "unknown" unless success is directly evidenced; use indicators_of_success for supporting signals.
+4. recommended_actions: Frame as investigation steps using neutral language. Prefer phrasing like "review ... to determine whether ...". Include "refer to the references provded" where relevant.
+5. analyst_guidance: Provide concise priority and next_best_action focused on validation before escalation, and make both fields specific to this exact case.
+6. questions_for_investigation: Provide 4–8 concrete, specific questions an analyst should ask. Make them actionable.
+7. missing_data_for_confidence: List what additional context or logs would increase your confidence in this assessment.
+8. retrieved_references: Include title and source_url from knowledge base when available.
+9. Ensure valid JSON output. Do NOT include any explanatory text outside the JSON object.
+10. Use the provided schema EXACTLY. Do NOT add, remove, or rename fields.
+11. Do NOT copy placeholder/sample wording from this schema into the final answer; generate incident-specific wording.
+12. Avoid role inference from naming conventions (usernames, hostnames, labels) unless explicitly provided in the input data.
+13. If retrieved_references exist, acknowledge them naturally in actions/guidance, but do not repeat the same sentence in every item.
+
+---
+
+CONFIDENCE GUIDANCE:
+
+- HIGH: Multiple signals converge on a known attack pattern. Still frame as hypothesis + require validation.
+- MEDIUM: Pattern suggests possible malicious activity. Benign explanations are plausible.
+- LOW: Insufficient signals. Could be routine activity. Suggest more data before escalation.
+
+TONE: Neutral, analytical, non-alarmist. Empower investigation, not panic.
 """
 
 	def generate_security_event_narrative(self, trigger_alert, attack_session, rag_context=None):

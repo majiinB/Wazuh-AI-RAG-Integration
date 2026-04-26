@@ -36,7 +36,8 @@ from .serializers import (
     AlertAcknowledgeSerializer,
     OpenSearchAlertSerializer,
 )
-from .services.ingest_service import process_integrator_payload
+from .services.ingest_service import extract_iocs, process_integrator_payload
+from .services.noise_filter import should_exclude_query
 from .services.opensearch_service import (
     search_alerts,
     search_alerts_by_iocs,
@@ -75,6 +76,19 @@ class IntegratorIngestView(APIView):
             return Response({"error": "Empty payload"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
+            iocs = extract_iocs(payload)
+            # Check query-level noise filter before doing any further processing or lookups.
+            excluded, reason = should_exclude_query(iocs)
+            if excluded:
+                logger.info("Wazuh ingest excluded by shield: %s", reason)
+                return Response(
+                    {
+                        "status": "excluded",
+                        "reason": reason,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
             # Extract IOCs and context, construct retrieval query, and (optionally) persist high-severity alerts.
             payload_result = process_integrator_payload(payload, remote_ip=remote_ip)
             logger.info("Wazuh ingest processed result: %s", json.dumps(payload_result, default=str))
@@ -150,7 +164,7 @@ class IntegratorIngestView(APIView):
 # ---------------------------------------------------------------------------
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def health_check(request):
     """GET /api/logs/health/"""
     opensearch_ok = check_connection()
