@@ -24,11 +24,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
+# Copy Python packages from builder into appuser-owned location
+COPY --from=builder /root/.local /home/appuser/.local
 
-# Set PATH to include user site-packages
-ENV PATH=/root/.local/bin:$PATH \
+# Set PATH to include appuser site-packages
+ENV PATH=/home/appuser/.local/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DJANGO_SETTINGS_MODULE=core.settings
@@ -38,7 +38,7 @@ COPY . .
 
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
+    chown -R appuser:appuser /app /home/appuser/.local
 
 USER appuser
 
@@ -48,7 +48,7 @@ USER appuser
 # Run migrations and start application
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/logs/health/').read()" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/').read()" || exit 1
 
 # Default port
 EXPOSE 8000

@@ -29,7 +29,7 @@ DEBUG = True
 ALLOWED_HOSTS = config(
     "ALLOWED_HOSTS",
     cast=Csv(),
-    default="192.168.1.5,localhost,127.0.0.1",
+    default="192.168.12.63,localhost,127.0.0.1",
 )
 
 DATABASES = {
@@ -55,7 +55,11 @@ WAZUH_INDEXER = {
 
 ALERTS_CLIENT_CALLBACK_URL = config(
     "ALERTS_CLIENT_CALLBACK_URL",
-    default="http://localhost:3000/api/incidents/webhook",
+    default=(
+        "http://host.docker.internal:3000/api/incidents/webhook"
+        if Path("/.dockerenv").exists()
+        else "http://localhost:3000/api/incidents/webhook"
+    ),
 )
 ALERTS_CLIENT_CALLBACK_TIMEOUT = config("ALERTS_CLIENT_CALLBACK_TIMEOUT", cast=float, default=5.0)
 
